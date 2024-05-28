@@ -14,8 +14,8 @@ pub struct Trade {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct BookLevel {
-    pub px: f64,
-    pub sz: f64,
+    pub px: String,
+    pub sz: String,
     pub n: u64,
 }
 
