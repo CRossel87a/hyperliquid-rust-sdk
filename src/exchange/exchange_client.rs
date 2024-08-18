@@ -1,9 +1,9 @@
 use crate::signature::sign_typed_data;
 use crate::{
-    consts::MAINNET_API_URL,
     exchange::{
         actions::{
-            ApproveAgent, BulkCancel, BulkOrder, UpdateIsolatedMargin, UpdateLeverage, UsdSend,
+            ApproveAgent, BulkCancel, BulkOrder, SetReferrer, UpdateIsolatedMargin, UpdateLeverage,
+            UsdSend,
         },
         cancel::{CancelRequest, CancelRequestCloid},
         ClientCancelRequest, ClientOrderRequest,
@@ -16,6 +16,7 @@ use crate::{
     signature::sign_l1_action,
     BaseUrl, BulkCancelCloid, Error, ExchangeResponseStatus,
 };
+use crate::{ClassTransfer, SpotSend, SpotUser, VaultTransfer, Withdraw3};
 use ethers::{
     abi::AbiEncode,
     signers::{LocalWallet, Signer},
@@ -56,6 +57,11 @@ pub enum Actions {
     Cancel(BulkCancel),
     CancelByCloid(BulkCancelCloid),
     ApproveAgent(ApproveAgent),
+    Withdraw3(Withdraw3),
+    SpotUser(SpotUser),
+    VaultTransfer(VaultTransfer),
+    SpotSend(SpotSend),
+    SetReferrer(SetReferrer),
 }
 
 impl Actions {
@@ -84,10 +90,10 @@ impl ExchangeClient {
         let client = client.unwrap_or_default();
         let base_url = base_url.unwrap_or(BaseUrl::Mainnet);
 
+        let info = InfoClient::new(None, Some(base_url)).await?;
         let meta = if let Some(meta) = meta {
             meta
         } else {
-            let info = InfoClient::new(None, Some(base_url)).await?;
             info.meta().await?
         };
 
@@ -95,6 +101,11 @@ impl ExchangeClient {
         for (asset_ind, asset) in meta.universe.iter().enumerate() {
             coin_to_asset.insert(asset.name.clone(), asset_ind as u32);
         }
+
+        coin_to_asset = info
+            .spot_meta()
+            .await?
+            .add_pair_and_name_to_index_map(coin_to_asset);
 
         Ok(ExchangeClient {
             wallet,
@@ -141,7 +152,7 @@ impl ExchangeClient {
         wallet: Option<&LocalWallet>,
     ) -> Result<ExchangeResponseStatus> {
         let wallet = wallet.unwrap_or(&self.wallet);
-        let hyperliquid_chain = if self.http_client.base_url.eq(MAINNET_API_URL) {
+        let hyperliquid_chain = if self.http_client.is_mainnet() {
             "Mainnet".to_string()
         } else {
             "Testnet".to_string()
@@ -155,9 +166,60 @@ impl ExchangeClient {
             amount: amount.to_string(),
             time: timestamp,
         };
-        let signature = sign_typed_data(&usd_send, &wallet)?;
+        let signature = sign_typed_data(&usd_send, wallet)?;
         let action = serde_json::to_value(Actions::UsdSend(usd_send))
             .map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        self.post(action, signature, timestamp).await
+    }
+
+    pub async fn class_transfer(
+        &self,
+        usdc: f64,
+        to_perp: bool,
+        wallet: Option<&LocalWallet>,
+    ) -> Result<ExchangeResponseStatus> {
+        // payload expects usdc without decimals
+        let usdc = (usdc * 1e6).round() as u64;
+        let wallet = wallet.unwrap_or(&self.wallet);
+
+        let timestamp = next_nonce();
+
+        let action = Actions::SpotUser(SpotUser {
+            class_transfer: ClassTransfer { usdc, to_perp },
+        });
+        let connection_id = action.hash(timestamp, self.vault_address)?;
+        let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
+        let is_mainnet = self.http_client.is_mainnet();
+        let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
+
+        self.post(action, signature, timestamp).await
+    }
+
+    pub async fn vault_transfer(
+        &self,
+        is_deposit: bool,
+        usd: String,
+        vault_address: Option<H160>,
+        wallet: Option<&LocalWallet>,
+    ) -> Result<ExchangeResponseStatus> {
+        let vault_address = self
+            .vault_address
+            .or(vault_address)
+            .ok_or_else(|| Error::VaultAddressNotFound)?;
+        let wallet = wallet.unwrap_or(&self.wallet);
+
+        let timestamp = next_nonce();
+
+        let action = Actions::VaultTransfer(VaultTransfer {
+            vault_address,
+            is_deposit,
+            usd,
+        });
+        let connection_id = action.hash(timestamp, self.vault_address)?;
+        let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
+        let is_mainnet = self.http_client.is_mainnet();
+        let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
 
         self.post(action, signature, timestamp).await
     }
@@ -191,7 +253,7 @@ impl ExchangeClient {
         let connection_id = action.hash(timestamp, self.vault_address)?;
         let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
 
-        let is_mainnet = self.http_client.base_url == BaseUrl::Mainnet.get_url();
+        let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
         self.post(action, signature, timestamp).await
     }
@@ -230,7 +292,7 @@ impl ExchangeClient {
         let connection_id = action.hash(timestamp, self.vault_address)?;
 
         let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
-        let is_mainnet = self.http_client.base_url == BaseUrl::Mainnet.get_url();
+        let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
 
         self.post(action, signature, timestamp).await
@@ -270,7 +332,7 @@ impl ExchangeClient {
 
         let connection_id = action.hash(timestamp, self.vault_address)?;
         let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
-        let is_mainnet = self.http_client.base_url == BaseUrl::Mainnet.get_url();
+        let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
 
         self.post(action, signature, timestamp).await
@@ -295,7 +357,7 @@ impl ExchangeClient {
         });
         let connection_id = action.hash(timestamp, self.vault_address)?;
         let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
-        let is_mainnet = self.http_client.base_url == BaseUrl::Mainnet.get_url();
+        let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
 
         self.post(action, signature, timestamp).await
@@ -320,7 +382,7 @@ impl ExchangeClient {
         });
         let connection_id = action.hash(timestamp, self.vault_address)?;
         let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
-        let is_mainnet = self.http_client.base_url == BaseUrl::Mainnet.get_url();
+        let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
 
         self.post(action, signature, timestamp).await
@@ -338,7 +400,7 @@ impl ExchangeClient {
             .map_err(|e| Error::PrivateKeyParse(e.to_string()))?
             .address();
 
-        let hyperliquid_chain = if self.http_client.base_url.eq(MAINNET_API_URL) {
+        let hyperliquid_chain = if self.http_client.is_mainnet() {
             "Mainnet".to_string()
         } else {
             "Testnet".to_string()
@@ -352,10 +414,86 @@ impl ExchangeClient {
             agent_name: None,
             nonce,
         };
-        let signature = sign_typed_data(&approve_agent, &wallet)?;
+        let signature = sign_typed_data(&approve_agent, wallet)?;
         let action = serde_json::to_value(Actions::ApproveAgent(approve_agent))
             .map_err(|e| Error::JsonParse(e.to_string()))?;
         Ok((key, self.post(action, signature, nonce).await?))
+    }
+
+    pub async fn withdraw_from_bridge(
+        &self,
+        amount: &str,
+        destination: &str,
+        wallet: Option<&LocalWallet>,
+    ) -> Result<ExchangeResponseStatus> {
+        let wallet = wallet.unwrap_or(&self.wallet);
+        let hyperliquid_chain = if self.http_client.is_mainnet() {
+            "Mainnet".to_string()
+        } else {
+            "Testnet".to_string()
+        };
+
+        let timestamp = next_nonce();
+        let withdraw = Withdraw3 {
+            signature_chain_id: 421614.into(),
+            hyperliquid_chain,
+            destination: destination.to_string(),
+            amount: amount.to_string(),
+            time: timestamp,
+        };
+        let signature = sign_typed_data(&withdraw, wallet)?;
+        let action = serde_json::to_value(Actions::Withdraw3(withdraw))
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        self.post(action, signature, timestamp).await
+    }
+
+    pub async fn spot_transfer(
+        &self,
+        amount: &str,
+        destination: &str,
+        token: &str,
+        wallet: Option<&LocalWallet>,
+    ) -> Result<ExchangeResponseStatus> {
+        let wallet = wallet.unwrap_or(&self.wallet);
+        let hyperliquid_chain = if self.http_client.is_mainnet() {
+            "Mainnet".to_string()
+        } else {
+            "Testnet".to_string()
+        };
+
+        let timestamp = next_nonce();
+        let spot_send = SpotSend {
+            signature_chain_id: 421614.into(),
+            hyperliquid_chain,
+            destination: destination.to_string(),
+            amount: amount.to_string(),
+            time: timestamp,
+            token: token.to_string(),
+        };
+        let signature = sign_typed_data(&spot_send, wallet)?;
+        let action = serde_json::to_value(Actions::SpotSend(spot_send))
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        self.post(action, signature, timestamp).await
+    }
+
+    pub async fn set_referrer(
+        &self,
+        code: String,
+        wallet: Option<&LocalWallet>,
+    ) -> Result<ExchangeResponseStatus> {
+        let wallet = wallet.unwrap_or(&self.wallet);
+        let timestamp = next_nonce();
+
+        let action = Actions::SetReferrer(SetReferrer { code });
+
+        let connection_id = action.hash(timestamp, self.vault_address)?;
+        let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        let is_mainnet = self.http_client.is_mainnet();
+        let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
+        self.post(action, signature, timestamp).await
     }
 }
 
@@ -439,13 +577,13 @@ mod tests {
         for (tpsl, mainnet_signature, testnet_signature) in [
             (
                 "tp",
-                "e844cafedb695abbc28b3178b136d262327a72bba1012152f3b5b675147e98312d42de83976b05becf768ad882f6f6a1bfa65afadc71f945c2a98473317097ee1b",
-                "f360f6173c1d9a8ff2d8677e1fc4cb787122542985129c42e8bce47c5d58f6910ee42b10fd69af0bff0dd484e2cb8d3fa8fecfec13bde5e31f5d3d47d1e5a73f1b"
+                "b91e5011dff15e4b4a40753730bda44972132e7b75641f3cac58b66159534a170d422ee1ac3c7a7a2e11e298108a2d6b8da8612caceaeeb3e571de3b2dfda9e41b",
+                "6df38b609904d0d4439884756b8f366f22b3a081801dbdd23f279094a2299fac6424cb0cdc48c3706aeaa368f81959e91059205403d3afd23a55983f710aee871b"
             ),
             (
                 "sl",
-                "d10f92a81428c0b57fb619f206bca34ad0cb668be8305306804b27491b4f9c257a87dbd87ad5b6e2bce2ae466b004f7572c5080672ed58cdcb3ffaedcd9de9111c",
-                "51b70df3ee8afcdf192390ee79a18b54a8ec92c86653e8ef80b0c90a7cf9850500c6653c4aa2317e7312dfc9b2aeba515d801d7e8af66567539861a6d5eb2d2b1c"
+                "8456d2ace666fce1bee1084b00e9620fb20e810368841e9d4dd80eb29014611a0843416e51b1529c22dd2fc28f7ff8f6443875635c72011f60b62cbb8ce90e2d1c",
+                "eb5bdb52297c1d19da45458758bd569dcb24c07e5c7bd52cf76600fd92fdd8213e661e21899c985421ec018a9ee7f3790e7b7d723a9932b7b5adcd7def5354601c"
             )
         ] {
             let wallet = get_wallet()?;

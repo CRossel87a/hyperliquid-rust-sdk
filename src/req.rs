@@ -1,4 +1,4 @@
-use crate::{prelude::*, Error};
+use crate::{prelude::*, BaseUrl, Error};
 use reqwest::{Client, Response};
 use serde::Deserialize;
 
@@ -26,7 +26,7 @@ async fn parse_response(response: Response) -> Result<String> {
         return Ok(text);
     }
     let error_data = serde_json::from_str::<ErrorData>(&text);
-    if status_code >= 400 && status_code < 500 {
+    if (400..500).contains(&status_code) {
         let client_error = match error_data {
             Ok(error_data) => Error::ClientRequest {
                 status_code,
@@ -68,5 +68,9 @@ impl HttpClient {
             .await
             .map_err(|e| Error::GenericRequest(e.to_string()))?;
         parse_response(result).await
+    }
+
+    pub fn is_mainnet(&self) -> bool {
+        self.base_url == BaseUrl::Mainnet.get_url()
     }
 }
