@@ -17,11 +17,8 @@ use crate::{
     BaseUrl, BulkCancelCloid, Error, ExchangeResponseStatus,
 };
 use crate::{ClassTransfer, SpotSend, SpotUser, VaultTransfer, Withdraw3};
-use ethers::{
-    abi::AbiEncode,
-    signers::{LocalWallet, Signer},
-    types::{Signature, H160, H256},
-};
+
+use alloy::{network::EthereumWallet, primitives::{Address, B256}, signers::local::PrivateKeySigner};
 use log::debug;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -31,7 +28,7 @@ use super::cancel::ClientCancelRequestCloid;
 
 pub struct ExchangeClient {
     pub http_client: HttpClient,
-    pub wallet: LocalWallet,
+    pub wallet: EthereumWallet,
     pub meta: Meta,
     pub vault_address: Option<H160>,
     pub coin_to_asset: HashMap<String, u32>,

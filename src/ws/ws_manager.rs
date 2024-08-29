@@ -19,7 +19,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 
-use ethers::types::H160;
+use alloy::primitives::Address;
 
 #[derive(Debug)]
 struct SubscriptionData {
@@ -40,13 +40,13 @@ pub enum Subscription {
     AllMids,
     Trades { coin: String },
     L2Book { coin: String },
-    UserEvents { user: H160 },
-    UserFills { user: H160 },
+    UserEvents { user: Address },
+    UserFills { user: Address },
     Candle { coin: String, interval: String },
-    OrderUpdates { user: H160 },
-    UserFundings { user: H160 },
-    UserNonFundingLedgerUpdates { user: H160 },
-    Notification { user: H160 },
+    OrderUpdates { user: Address },
+    UserFundings { user: Address },
+    UserNonFundingLedgerUpdates { user: Address },
+    Notification { user: Address },
 }
 
 #[derive(Deserialize, Clone, Debug)]

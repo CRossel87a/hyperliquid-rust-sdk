@@ -1,14 +1,11 @@
-use ethers::{
-    core::k256::{elliptic_curve::FieldBytes, Secp256k1},
-    signers::LocalWallet,
-    types::{transaction::eip712::Eip712, Signature, H256, U256},
-};
+
+use alloy::{network::{EthereumWallet, NetworkWallet}, primitives::{Address, B256, U256}, signers::local::PrivateKeySigner};
 
 use crate::{prelude::*, proxy_digest::Sha256Proxy, signature::agent::l1, Error};
 
 pub(crate) fn sign_l1_action(
     wallet: &LocalWallet,
-    connection_id: H256,
+    connection_id: B256,
     is_mainnet: bool,
 ) -> Result<Signature> {
     let source = if is_mainnet { "a" } else { "b" }.to_string();
@@ -21,15 +18,16 @@ pub(crate) fn sign_l1_action(
     )
 }
 
-pub(crate) fn sign_typed_data<T: Eip712>(payload: &T, wallet: &LocalWallet) -> Result<Signature> {
+pub(crate) fn sign_typed_data<T: Eip712>(payload: &T, wallet: &EthereumWallet) -> Result<Signature> {
     let encoded = payload
         .encode_eip712()
         .map_err(|e| Error::Eip712(e.to_string()))?;
 
-    sign_hash(H256::from(encoded), wallet)
+    sign_hash(B256::from(encoded), wallet)
 }
 
-fn sign_hash(hash: H256, wallet: &LocalWallet) -> Result<Signature> {
+fn sign_hash(hash: B256, wallet: &EthereumWallet) -> Result<Signature> {
+
     let (sig, rec_id) = wallet
         .signer()
         .sign_digest_recoverable(Sha256Proxy::from(hash))
@@ -62,7 +60,7 @@ mod tests {
     fn test_sign_l1_action() -> Result<()> {
         let wallet = get_wallet()?;
         let connection_id =
-            H256::from_str("0xde6c4037798a4434ca03cd05f00e3b803126221375cd1e7eaaaf041768be06eb")
+            B256::from_str("0xde6c4037798a4434ca03cd05f00e3b803126221375cd1e7eaaaf041768be06eb")
                 .map_err(|e| Error::GenericParse(e.to_string()))?;
 
         let expected_mainnet_sig = "fa8a41f6a3fa728206df80801a83bcbfbab08649cd34d9c0bfba7c7b2f99340f53a00226604567b98a1492803190d65a201d6805e5831b7044f17fd530aec7841c";

@@ -1,7 +1,12 @@
+
+/* 
 use ethers::{
     signers::{LocalWallet, Signer},
     types::H160,
 };
+*/
+
+use alloy::primitives::Address;
 use log::{error, info};
 
 use tokio::sync::mpsc::unbounded_channel;
@@ -41,7 +46,7 @@ pub struct MarketMaker {
     pub latest_mid_price: f64,
     pub info_client: InfoClient,
     pub exchange_client: ExchangeClient,
-    pub user_address: H160,
+    pub user_address: Address,
 }
 
 impl MarketMaker {

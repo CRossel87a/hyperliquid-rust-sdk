@@ -1,15 +1,5 @@
 use crate::exchange::{cancel::CancelRequest, order::OrderRequest};
-pub(crate) use ethers::{
-    abi::{encode, ParamType, Tokenizable},
-    types::{
-        transaction::{
-            eip712,
-            eip712::{encode_eip712_type, EIP712Domain, Eip712, Eip712Error},
-        },
-        H160, U256,
-    },
-    utils::keccak256,
-};
+use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 
 use super::cancel::CancelRequestCloid;
@@ -118,7 +108,7 @@ pub struct BulkCancelCloid {
 pub struct ApproveAgent {
     pub signature_chain_id: U256,
     pub hyperliquid_chain: String,
-    pub agent_address: H160,
+    pub agent_address: Address,
     pub agent_name: Option<String>,
     pub nonce: u64,
 }
@@ -277,7 +267,7 @@ pub struct ClassTransfer {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultTransfer {
-    pub vault_address: H160,
+    pub vault_address: Address,
     pub is_deposit: bool,
     pub usd: String,
 }
