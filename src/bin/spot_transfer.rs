@@ -11,9 +11,7 @@ async fn main() {
             .parse()
             .unwrap();
 
-    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None, None)
-        .await
-        .unwrap();
+    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None);
 
     let amount = "1";
     let destination = "0x0D1d9635D0640821d15e323ac8AdADfA9c111414";

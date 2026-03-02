@@ -16,12 +16,10 @@ async fn main() {
             .parse()
             .unwrap();
 
-    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None, None)
-        .await
-        .unwrap();
+    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None);
 
     let order = ClientOrderRequest {
-        asset: "XYZTWO/USDC".to_string(),
+        asset: 10000, // replace with your spot asset index
         is_buy: true,
         reduce_only: false,
         limit_px: 0.00002378,
@@ -50,7 +48,7 @@ async fn main() {
     sleep(Duration::from_secs(10));
 
     let cancel = ClientCancelRequest {
-        asset: "HFUN/USDC".to_string(),
+        asset: 10000, // replace with your spot asset index
         oid,
     };
 

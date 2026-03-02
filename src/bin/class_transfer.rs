@@ -11,9 +11,7 @@ async fn main() {
             .parse()
             .unwrap();
 
-    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None, None)
-        .await
-        .unwrap();
+    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None);
 
     let usdc = 1.0; // 1 USD
     let to_perp = false;

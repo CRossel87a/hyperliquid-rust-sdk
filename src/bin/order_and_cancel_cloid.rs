@@ -16,14 +16,12 @@ async fn main() {
             .parse()
             .unwrap();
 
-    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None, None)
-        .await
-        .unwrap();
+    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None);
 
     // Order and Cancel with cloid
     let cloid = Uuid::new_v4();
     let order = ClientOrderRequest {
-        asset: "ETH".to_string(),
+        asset: 4, // replace with your asset index
         is_buy: true,
         reduce_only: false,
         limit_px: 1800.0,
@@ -41,7 +39,7 @@ async fn main() {
     sleep(Duration::from_secs(10));
 
     let cancel = ClientCancelRequestCloid {
-        asset: "ETH".to_string(),
+        asset: 4, // replace with your asset index
         cloid,
     };
 

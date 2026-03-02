@@ -1,15 +1,16 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::prelude::Utc;
-use lazy_static::lazy_static;
 use log::info;
 use uuid::Uuid;
 
 use crate::consts::*;
 
 fn now_timestamp_ms() -> u64 {
-    let now = Utc::now();
-    now.timestamp_millis() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis() as u64
 }
 
 pub(crate) fn next_nonce() -> u64 {
@@ -53,23 +54,6 @@ pub(crate) fn uuid_to_hex_string(uuid: Uuid) -> String {
     format!("0x{hex_string}")
 }
 
-pub fn truncate_float(float: f64, decimals: u32, round_up: bool) -> f64 {
-    let pow10 = 10i64.pow(decimals) as f64;
-    let mut float = (float * pow10) as u64;
-    if round_up {
-        float += 1;
-    }
-    float as f64 / pow10
-}
-
-pub fn bps_diff(x: f64, y: f64) -> u16 {
-    if x.abs() < EPSILON {
-        INF_BPS
-    } else {
-        (((y - x).abs() / (x)) * 10_000.0) as u16
-    }
-}
-
 #[derive(Copy, Clone)]
 pub enum BaseUrl {
     Localhost,
@@ -87,9 +71,17 @@ impl BaseUrl {
     }
 }
 
-lazy_static! {
-    static ref CUR_NONCE: AtomicU64 = AtomicU64::new(now_timestamp_ms());
+static CUR_NONCE: AtomicU64 = AtomicU64::new(0);
+
+fn init_nonce() {
+    CUR_NONCE.fetch_max(now_timestamp_ms(), Ordering::Relaxed);
 }
+
+#[used]
+#[cfg_attr(target_os = "linux", link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
+static INIT: fn() = init_nonce;
 
 #[cfg(test)]
 mod tests {

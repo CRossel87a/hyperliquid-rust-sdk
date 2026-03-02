@@ -5,7 +5,10 @@ use hyperliquid_rust_sdk::{
     BaseUrl, ClientLimit, ClientOrder, ClientOrderRequest, ExchangeClient, ExchangeDataStatus,
     ExchangeResponseStatus,
 };
-use std::{thread::sleep, time::Duration};
+use std::{
+    thread::sleep,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[tokio::main]
 async fn main() {
@@ -16,15 +19,13 @@ async fn main() {
             .parse()
             .unwrap();
 
-    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None, None)
-        .await
-        .unwrap();
+    let exchange_client = ExchangeClient::new(None, wallet, Some(BaseUrl::Testnet), None);
 
     info!("Testing Schedule Cancel Dead Man's Switch functionality...");
 
     // First, place a test order that we can cancel later
     let order = ClientOrderRequest {
-        asset: "ETH".to_string(),
+        asset: 4, // replace with your asset index
         is_buy: true,
         reduce_only: false,
         limit_px: 100.0,
@@ -54,8 +55,10 @@ async fn main() {
     }
 
     // Schedule a cancel operation 15 seconds in the future
-    // Use chrono to for UTC timestamp
-    let current_time = chrono::Utc::now().timestamp_millis() as u64;
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis() as u64;
     let cancel_time = current_time + 15000; // 15 seconds from now
 
     let response = exchange_client

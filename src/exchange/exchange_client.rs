@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use alloy::{
     primitives::{keccak256, Address, Signature, B256},
     signers::local::PrivateKeySigner,
@@ -17,12 +15,9 @@ use crate::{
         },
         cancel::{CancelRequest, CancelRequestCloid, ClientCancelRequestCloid},
         modify::{ClientModifyRequest, ModifyRequest},
-        order::{MarketCloseParams, MarketOrderParams},
-        BuilderInfo, ClientCancelRequest, ClientLimit, ClientOrder, ClientOrderRequest,
+        BuilderInfo, ClientCancelRequest, ClientOrderRequest,
     },
     helpers::{next_nonce, uuid_to_hex_string},
-    info::info_client::InfoClient,
-    meta::Meta,
     prelude::*,
     req::HttpClient,
     signature::{sign_l1_action, sign_typed_data},
@@ -34,9 +29,7 @@ use crate::{
 pub struct ExchangeClient {
     pub http_client: HttpClient,
     pub wallet: PrivateKeySigner,
-    pub meta: Meta,
     pub vault_address: Option<Address>,
-    pub coin_to_asset: HashMap<String, u32>,
 }
 
 fn serialize_sig<S>(sig: &Signature, s: S) -> std::result::Result<S::Ok, S::Error>
@@ -100,43 +93,23 @@ impl Actions {
 }
 
 impl ExchangeClient {
-    pub async fn new(
+    pub fn new(
         client: Option<Client>,
         wallet: PrivateKeySigner,
         base_url: Option<BaseUrl>,
-        meta: Option<Meta>,
         vault_address: Option<Address>,
-    ) -> Result<ExchangeClient> {
+    ) -> ExchangeClient {
         let client = client.unwrap_or_default();
         let base_url = base_url.unwrap_or(BaseUrl::Mainnet);
 
-        let info = InfoClient::new(None, Some(base_url)).await?;
-        let meta = if let Some(meta) = meta {
-            meta
-        } else {
-            info.meta().await?
-        };
-
-        let mut coin_to_asset = HashMap::new();
-        for (asset_ind, asset) in meta.universe.iter().enumerate() {
-            coin_to_asset.insert(asset.name.clone(), asset_ind as u32);
-        }
-
-        coin_to_asset = info
-            .spot_meta()
-            .await?
-            .add_pair_and_name_to_index_map(coin_to_asset);
-
-        Ok(ExchangeClient {
+        ExchangeClient {
             wallet,
-            meta,
             vault_address,
             http_client: HttpClient {
                 client,
                 base_url: base_url.get_url(),
             },
-            coin_to_asset,
-        })
+        }
     }
 
     async fn post(
@@ -145,12 +118,6 @@ impl ExchangeClient {
         signature: Signature,
         nonce: u64,
     ) -> Result<ExchangeResponseStatus> {
-        // let signature = ExchangeSignature {
-        //     r: signature.r(),
-        //     s: signature.s(),
-        //     v: 27 + signature.v() as u64,
-        // };
-
         let exchange_payload = ExchangePayload {
             action,
             signature,
@@ -310,158 +277,6 @@ impl ExchangeClient {
         self.post(action, signature, timestamp).await
     }
 
-    pub async fn market_open(
-        &self,
-        params: MarketOrderParams<'_>,
-    ) -> Result<ExchangeResponseStatus> {
-        let slippage = params.slippage.unwrap_or(0.05); // Default 5% slippage
-        let (px, sz_decimals) = self
-            .calculate_slippage_price(params.asset, params.is_buy, slippage, params.px)
-            .await?;
-
-        let order = ClientOrderRequest {
-            asset: params.asset.to_string(),
-            is_buy: params.is_buy,
-            reduce_only: false,
-            limit_px: px,
-            sz: round_to_decimals(params.sz, sz_decimals),
-            cloid: params.cloid,
-            order_type: ClientOrder::Limit(ClientLimit {
-                tif: "Ioc".to_string(),
-            }),
-        };
-
-        self.order(order, params.wallet).await
-    }
-
-    pub async fn market_open_with_builder(
-        &self,
-        params: MarketOrderParams<'_>,
-        builder: BuilderInfo,
-    ) -> Result<ExchangeResponseStatus> {
-        let slippage = params.slippage.unwrap_or(0.05); // Default 5% slippage
-        let (px, sz_decimals) = self
-            .calculate_slippage_price(params.asset, params.is_buy, slippage, params.px)
-            .await?;
-
-        let order = ClientOrderRequest {
-            asset: params.asset.to_string(),
-            is_buy: params.is_buy,
-            reduce_only: false,
-            limit_px: px,
-            sz: round_to_decimals(params.sz, sz_decimals),
-            cloid: params.cloid,
-            order_type: ClientOrder::Limit(ClientLimit {
-                tif: "Ioc".to_string(),
-            }),
-        };
-
-        self.order_with_builder(order, params.wallet, builder).await
-    }
-
-    pub async fn market_close(
-        &self,
-        params: MarketCloseParams<'_>,
-    ) -> Result<ExchangeResponseStatus> {
-        let slippage = params.slippage.unwrap_or(0.05); // Default 5% slippage
-        let wallet = params.wallet.unwrap_or(&self.wallet);
-
-        let base_url = match self.http_client.base_url.as_str() {
-            "https://api.hyperliquid.xyz" => BaseUrl::Mainnet,
-            "https://api.hyperliquid-testnet.xyz" => BaseUrl::Testnet,
-            _ => return Err(Error::GenericRequest("Invalid base URL".to_string())),
-        };
-        let info_client = InfoClient::new(None, Some(base_url)).await?;
-        let user_state = info_client.user_state(wallet.address()).await?;
-
-        let position = user_state
-            .asset_positions
-            .iter()
-            .find(|p| p.position.coin == params.asset)
-            .ok_or(Error::AssetNotFound)?;
-
-        let szi = position
-            .position
-            .szi
-            .parse::<f64>()
-            .map_err(|_| Error::FloatStringParse)?;
-
-        let (px, sz_decimals) = self
-            .calculate_slippage_price(params.asset, szi < 0.0, slippage, params.px)
-            .await?;
-
-        let sz = round_to_decimals(params.sz.unwrap_or_else(|| szi.abs()), sz_decimals);
-
-        let order = ClientOrderRequest {
-            asset: params.asset.to_string(),
-            is_buy: szi < 0.0,
-            reduce_only: true,
-            limit_px: px,
-            sz,
-            cloid: params.cloid,
-            order_type: ClientOrder::Limit(ClientLimit {
-                tif: "Ioc".to_string(),
-            }),
-        };
-
-        self.order(order, Some(wallet)).await
-    }
-
-    async fn calculate_slippage_price(
-        &self,
-        asset: &str,
-        is_buy: bool,
-        slippage: f64,
-        px: Option<f64>,
-    ) -> Result<(f64, u32)> {
-        let base_url = match self.http_client.base_url.as_str() {
-            "https://api.hyperliquid.xyz" => BaseUrl::Mainnet,
-            "https://api.hyperliquid-testnet.xyz" => BaseUrl::Testnet,
-            _ => return Err(Error::GenericRequest("Invalid base URL".to_string())),
-        };
-        let info_client = InfoClient::new(None, Some(base_url)).await?;
-        let meta = info_client.meta().await?;
-
-        let asset_meta = meta
-            .universe
-            .iter()
-            .find(|a| a.name == asset)
-            .ok_or(Error::AssetNotFound)?;
-
-        let sz_decimals = asset_meta.sz_decimals;
-        let max_decimals: u32 = if self.coin_to_asset[asset] < 10000 {
-            6
-        } else {
-            8
-        };
-        let price_decimals = max_decimals.saturating_sub(sz_decimals);
-
-        let px = if let Some(px) = px {
-            px
-        } else {
-            let all_mids = info_client.all_mids().await?;
-            all_mids
-                .get(asset)
-                .ok_or(Error::AssetNotFound)?
-                .parse::<f64>()
-                .map_err(|_| Error::FloatStringParse)?
-        };
-
-        debug!("px before slippage: {px:?}");
-        let slippage_factor = if is_buy {
-            1.0 + slippage
-        } else {
-            1.0 - slippage
-        };
-        let px = px * slippage_factor;
-
-        // Round to the correct number of decimal places and significant figures
-        let px = round_to_significant_and_decimal(px, 5, price_decimals);
-
-        debug!("px after slippage: {px:?}");
-        Ok((px, sz_decimals))
-    }
-
     pub async fn order(
         &self,
         order: ClientOrderRequest,
@@ -491,7 +306,7 @@ impl ExchangeClient {
         let mut transformed_orders = Vec::new();
 
         for order in orders {
-            transformed_orders.push(order.convert(&self.coin_to_asset)?);
+            transformed_orders.push(order.convert()?);
         }
 
         let action = Actions::Order(BulkOrder {
@@ -521,7 +336,7 @@ impl ExchangeClient {
         let mut transformed_orders = Vec::new();
 
         for order in orders {
-            transformed_orders.push(order.convert(&self.coin_to_asset)?);
+            transformed_orders.push(order.convert()?);
         }
 
         let action = Actions::Order(BulkOrder {
@@ -555,12 +370,8 @@ impl ExchangeClient {
 
         let mut transformed_cancels = Vec::new();
         for cancel in cancels.into_iter() {
-            let &asset = self
-                .coin_to_asset
-                .get(&cancel.asset)
-                .ok_or(Error::AssetNotFound)?;
             transformed_cancels.push(CancelRequest {
-                asset,
+                asset: cancel.asset,
                 oid: cancel.oid,
             });
         }
@@ -597,7 +408,7 @@ impl ExchangeClient {
         for modify in modifies.into_iter() {
             transformed_modifies.push(ModifyRequest {
                 oid: modify.oid,
-                order: modify.order.convert(&self.coin_to_asset)?,
+                order: modify.order.convert()?,
             });
         }
 
@@ -631,12 +442,8 @@ impl ExchangeClient {
 
         let mut transformed_cancels: Vec<CancelRequestCloid> = Vec::new();
         for cancel in cancels.into_iter() {
-            let &asset = self
-                .coin_to_asset
-                .get(&cancel.asset)
-                .ok_or(Error::AssetNotFound)?;
             transformed_cancels.push(CancelRequestCloid {
-                asset,
+                asset: cancel.asset,
                 cloid: uuid_to_hex_string(cancel.cloid),
             });
         }
@@ -656,7 +463,7 @@ impl ExchangeClient {
     pub async fn update_leverage(
         &self,
         leverage: u32,
-        coin: &str,
+        asset: u32,
         is_cross: bool,
         wallet: Option<&PrivateKeySigner>,
     ) -> Result<ExchangeResponseStatus> {
@@ -664,9 +471,8 @@ impl ExchangeClient {
 
         let timestamp = next_nonce();
 
-        let &asset_index = self.coin_to_asset.get(coin).ok_or(Error::AssetNotFound)?;
         let action = Actions::UpdateLeverage(UpdateLeverage {
-            asset: asset_index,
+            asset,
             is_cross,
             leverage,
         });
@@ -681,7 +487,7 @@ impl ExchangeClient {
     pub async fn update_isolated_margin(
         &self,
         amount: f64,
-        coin: &str,
+        asset: u32,
         wallet: Option<&PrivateKeySigner>,
     ) -> Result<ExchangeResponseStatus> {
         let wallet = wallet.unwrap_or(&self.wallet);
@@ -689,9 +495,8 @@ impl ExchangeClient {
         let amount = (amount * 1_000_000.0).round() as i64;
         let timestamp = next_nonce();
 
-        let &asset_index = self.coin_to_asset.get(coin).ok_or(Error::AssetNotFound)?;
         let action = Actions::UpdateIsolatedMargin(UpdateIsolatedMargin {
-            asset: asset_index,
+            asset,
             is_buy: true,
             ntli: amount,
         });
@@ -867,19 +672,6 @@ impl ExchangeClient {
 
         self.post(action, signature, timestamp).await
     }
-}
-
-fn round_to_decimals(value: f64, decimals: u32) -> f64 {
-    let factor = 10f64.powi(decimals as i32);
-    (value * factor).round() / factor
-}
-
-fn round_to_significant_and_decimal(value: f64, sig_figs: u32, max_decimals: u32) -> f64 {
-    let abs_value = value.abs();
-    let magnitude = abs_value.log10().floor() as i32;
-    let scale = 10f64.powi(sig_figs as i32 - magnitude - 1);
-    let rounded = (abs_value * scale).round() / scale;
-    round_to_decimals(rounded.copysign(value), max_decimals)
 }
 
 #[cfg(test)]

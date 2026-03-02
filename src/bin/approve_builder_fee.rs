@@ -12,9 +12,7 @@ async fn main() {
             .unwrap();
 
     let exchange_client =
-        ExchangeClient::new(None, wallet.clone(), Some(BaseUrl::Testnet), None, None)
-            .await
-            .unwrap();
+        ExchangeClient::new(None, wallet.clone(), Some(BaseUrl::Testnet), None);
 
     let max_fee_rate = "0.1%";
     let builder = address!("0x1ab189B7801140900C711E458212F9c76F8dAC79");
