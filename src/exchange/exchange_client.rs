@@ -112,6 +112,97 @@ impl ExchangeClient {
         }
     }
 
+    pub async fn get_order(
+        &self,
+        user: Address,
+        oid: u64,
+    ) -> Result<Option<crate::OrderStatus>> {
+        let req = serde_json::json!({
+            "type": "orderStatus",
+            "user": user,
+            "oid": oid,
+        });
+        let data = serde_json::to_string(&req).map_err(|e| Error::JsonParse(e.to_string()))?;
+        let resp = self
+            .http_client
+            .post("/info", data)
+            .await
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[serde(tag = "status")]
+        enum Response {
+            Order { order: crate::OrderStatus },
+            UnknownOid,
+        }
+
+        let parsed: Response =
+            serde_json::from_str(&resp).map_err(|e| Error::JsonParse(e.to_string()))?;
+        Ok(match parsed {
+            Response::Order { order } => Some(order),
+            Response::UnknownOid => None,
+        })
+    }
+
+    pub async fn get_order_summary(
+        &self,
+        user: Address,
+        oid: u64,
+    ) -> Result<Option<crate::FuturesOrderSummary>> {
+        // 1. Get order status for coin/side
+        let order_status = match self.get_order(user, oid).await? {
+            Some(os) => os,
+            None => return Ok(None),
+        };
+
+        // 2. Fetch fills scoped to the order's timestamp
+        let req = serde_json::json!({
+            "type": "userFillsByTime",
+            "user": user,
+            "startTime": order_status.order.timestamp,
+        });
+        let data = serde_json::to_string(&req).map_err(|e| Error::JsonParse(e.to_string()))?;
+        let resp = self
+            .http_client
+            .post("/info", data)
+            .await
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+        let fills: Vec<crate::UserFill> =
+            serde_json::from_str(&resp).map_err(|e| Error::JsonParse(e.to_string()))?;
+
+
+        let mut total_qty = 0.0_f64;
+        let mut total_cost = 0.0_f64;
+        let mut total_fees = 0.0_f64;
+
+        for fill in &fills {
+            if fill.oid != oid {
+                continue;
+            }
+            let px: f64 = fill.px.parse().unwrap_or(0.0);
+            let sz: f64 = fill.sz.parse().unwrap_or(0.0);
+            let fee: f64 = fill.fee.parse().unwrap_or(0.0);
+            total_qty += sz;
+            total_cost += px * sz;
+            total_fees += fee;
+        }
+
+        let avg_price = if total_qty > 0.0 {
+            total_cost / total_qty
+        } else {
+            0.0
+        };
+
+        Ok(Some(crate::FuturesOrderSummary {
+            avg_price,
+            executed_qty: total_qty,
+            fees: total_fees,
+            side: order_status.order.side,
+            symbol: order_status.order.coin,
+        }))
+    }
+
     async fn post(
         &self,
         action: serde_json::Value,
