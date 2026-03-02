@@ -102,4 +102,5 @@ pub struct FuturesOrderSummary {
     pub fees: f64,
     pub side: String,
     pub symbol: String,
+    pub status: String
 }

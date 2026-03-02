@@ -200,6 +200,7 @@ impl ExchangeClient {
             fees: total_fees,
             side: order_status.order.side,
             symbol: order_status.order.coin,
+            status: order_status.status
         }))
     }
 
